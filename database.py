@@ -1,9 +1,18 @@
 import sqlite3
+import os
 from config.settings import settings
+
+def get_db_path():
+    """Определяем путь к БД в зависимости от окружения"""
+    # На Render используем /tmp, локально — обычный путь
+    if os.path.exists('/tmp'):
+        return '/tmp/absurd.db'
+    return settings.DATABASE_PATH
 
 def init_db():
     """Инициализация базы данных"""
-    conn = sqlite3.connect(settings.DATABASE_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
     # Таблица существ
@@ -22,17 +31,16 @@ def init_db():
                   creature1_id INTEGER,
                   creature2_id INTEGER,
                   event_text TEXT NOT NULL,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY (creature1_id) REFERENCES creatures (id),
-                  FOREIGN KEY (creature2_id) REFERENCES creatures (id))''')
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
     conn.commit()
     conn.close()
-    print(f"✅ База данных инициализирована: {settings.DATABASE_PATH}")
+    print(f"✅ База данных инициализирована: {db_path}")
 
 def get_connection():
     """Получить соединение с базой"""
-    return sqlite3.connect(settings.DATABASE_PATH)
+    db_path = get_db_path()
+    return sqlite3.connect(db_path)
 
 if __name__ == '__main__':
     init_db()
