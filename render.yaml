@@ -2,17 +2,12 @@ services:
   - type: web
     name: absurd-zoo-bot
     env: python
-    region: frankfurt  # или singapore, ohio
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
-    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: EVENT_CHANNEL
-        value: "@absurd_zoo_log"
-      - key: EVENT_INTERVAL
-        value: "1800"
-      - key: DATABASE_PATH
-        value: "/opt/render/project/src/absurd.db"
+        sync: false
     plan: free
