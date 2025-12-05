@@ -3,9 +3,10 @@ import random
 import sqlite3
 import os
 import asyncio
+import sys
 from datetime import datetime
 from threading import Thread
-from flask import Flask
+from flask import Flask, jsonify
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -26,6 +27,8 @@ def home():
     <html>
     <head>
         <title>🐙 Заповедник Абсурда</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {
                 font-family: 'Courier New', monospace;
@@ -34,121 +37,349 @@ def home():
                 padding: 20px;
                 background: #0f0f23;
                 color: #00ff00;
+                line-height: 1.6;
             }
             .container {
                 border: 2px dashed #00ff00;
                 padding: 30px;
                 border-radius: 10px;
                 background: rgba(0, 255, 0, 0.05);
+                margin-top: 20px;
             }
             h1 {
                 color: #00ff00;
                 text-shadow: 0 0 10px #00ff00;
+                margin-bottom: 10px;
             }
             .status {
                 color: #00ff00;
                 font-weight: bold;
-                animation: blink 1s infinite;
+                display: inline-block;
+                padding: 5px 10px;
+                background: rgba(0, 255, 0, 0.1);
+                border-radius: 5px;
+                margin: 10px 0;
             }
-            @keyframes blink {
-                50% { opacity: 0.5; }
+            .online {
+                color: #00ff00;
+            }
+            .offline {
+                color: #ff0000;
             }
             .telegram-link {
                 display: inline-block;
                 background: #0088cc;
                 color: white;
-                padding: 10px 20px;
+                padding: 12px 24px;
                 border-radius: 5px;
                 text-decoration: none;
-                margin-top: 20px;
+                margin: 10px 5px;
+                font-weight: bold;
+                transition: all 0.3s;
+            }
+            .telegram-link:hover {
+                background: #006699;
+                transform: translateY(-2px);
+            }
+            .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }
+            .stat-box {
+                background: rgba(0, 255, 0, 0.05);
+                border: 1px solid #00ff00;
+                border-radius: 5px;
+                padding: 15px;
+                text-align: center;
+            }
+            .stat-number {
+                font-size: 24px;
+                font-weight: bold;
+                color: #00ff00;
+            }
+            .stat-label {
+                font-size: 12px;
+                color: #aaa;
+                margin-top: 5px;
+            }
+            .recent-event {
+                background: rgba(0, 255, 0, 0.05);
+                border-left: 3px solid #00ff00;
+                padding: 10px;
+                margin: 10px 0;
+                font-size: 14px;
+            }
+            .event-time {
+                color: #666;
+                font-size: 12px;
+                margin-top: 5px;
+            }
+            .footer {
+                margin-top: 30px;
+                border-top: 1px solid #333;
+                padding-top: 20px;
+                font-size: 12px;
+                color: #666;
+            }
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.7; }
+                100% { opacity: 1; }
+            }
+            .pulse {
+                animation: pulse 2s infinite;
             }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🐙 Заповедник Абсурда</h1>
-            <p><span class="status">●</span> Бот работает</p>
+            <div class="status online pulse">● ONLINE</div>
+            
             <p>Telegram бот для коллективной симуляции абсурдной экосистемы.</p>
             <p>Пользователи создают виртуальных существ, которые взаимодействуют в реальном времени.</p>
             
-            <h3>📊 Статистика:</h3>
-            <p>• Пользователей: {{ users }}</p>
-            <p>• Существ: {{ creatures }}</p>
-            <p>• Событий: {{ events }}</p>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-number">{{ users }}</div>
+                    <div class="stat-label">👥 ПОЛЬЗОВАТЕЛЕЙ</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{{ creatures }}</div>
+                    <div class="stat-label">🦠 СУЩЕСТВ</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{{ events }}</div>
+                    <div class="stat-label">📜 СОБЫТИЙ</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-number">{{ interval//60 }} мин</div>
+                    <div class="stat-label">⏱️ ИНТЕРВАЛ</div>
+                </div>
+            </div>
             
-            <h3>🔗 Ссылки:</h3>
-            <a href="https://t.me/{{ bot_username }}" class="telegram-link" target="_blank">
-                📱 Открыть в Telegram
-            </a>
-            <br>
-            <a href="{{ event_channel }}" class="telegram-link" style="background: #ff6b6b; margin-top: 10px;" target="_blank">
-                📢 Канал событий
-            </a>
+            <h3>🔗 Быстрые ссылки:</h3>
+            <div>
+                <a href="https://t.me/{{ bot_username }}" class="telegram-link" target="_blank">
+                    🤖 Открыть бота в Telegram
+                </a>
+                <a href="{{ event_channel }}" class="telegram-link" style="background: #ff6b6b;" target="_blank">
+                    📢 Канал событий
+                </a>
+            </div>
             
-            <p style="margin-top: 30px; font-size: 12px; color: #666;">
-                Заповедник работает на Render • Обновляется каждые {{ interval//60 }} минут
-            </p>
+            <h3>📜 Последние события:</h3>
+            {% if recent_events %}
+                {% for event in recent_events %}
+                <div class="recent-event">
+                    {{ event.text|safe }}
+                    <div class="event-time">{{ event.time }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p>Событий пока нет. Будь первым!</p>
+            {% endif %}
+            
+            <div class="footer">
+                <p>Заповедник работает на Render • Python {{ python_version }} • Обновляется каждые {{ interval//60 }} минут</p>
+                <p>Версия: 1.0.0 • <a href="/stats" style="color: #00ff00;">JSON API</a> • <a href="/health" style="color: #00ff00;">Health Check</a></p>
+            </div>
         </div>
+        
+        <script>
+            // Авто-обновление статистики каждые 30 секунд
+            setInterval(async () => {
+                try {
+                    const response = await fetch('/stats');
+                    const data = await response.json();
+                    
+                    // Обновляем статистику
+                    document.querySelectorAll('.stat-number')[0].textContent = data.data.users;
+                    document.querySelectorAll('.stat-number')[1].textContent = data.data.creatures;
+                    document.querySelectorAll('.stat-number')[2].textContent = data.data.events;
+                    
+                    // Обновляем события
+                    const eventsContainer = document.querySelector('.recent-events-container');
+                    if (eventsContainer && data.data.recent_events) {
+                        eventsContainer.innerHTML = data.data.recent_events.map(event => 
+                            `<div class="recent-event">${event.text}<div class="event-time">${event.time}</div></div>`
+                        ).join('');
+                    }
+                } catch (error) {
+                    console.log('Ошибка обновления:', error);
+                }
+            }, 30000);
+            
+            // Анимация статуса
+            const status = document.querySelector('.status');
+            setInterval(() => {
+                status.classList.toggle('pulse');
+            }, 2000);
+        </script>
     </body>
     </html>
     """
 
 @app.route('/health')
 def health():
-    return "OK", 200
+    """Health check для Render"""
+    try:
+        # Проверяем соединение с базой
+        conn = get_connection()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        
+        # Проверяем доступность бота
+        bot_status = "unknown"
+        try:
+            # Простая проверка без await (в отдельном потоке)
+            bot_status = "available"
+        except:
+            bot_status = "unavailable"
+        
+        return jsonify({
+            "status": "healthy",
+            "bot": bot_status,
+            "database": "connected",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/stats')
 def stats_api():
     """JSON API для статистики"""
-    conn = get_connection()
-    c = conn.cursor()
-    
-    c.execute("SELECT COUNT(*) FROM creatures")
-    total_creatures = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
-    total_users = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM events")
-    total_events = c.fetchone()[0]
-    
-    # Последние события
-    c.execute("SELECT event_text, created_at FROM events ORDER BY id DESC LIMIT 5")
-    recent_events = c.fetchall()
-    
-    conn.close()
-    
-    return {
-        "status": "operational",
-        "data": {
-            "users": total_users,
-            "creatures": total_creatures,
-            "events": total_events,
-            "recent_events": [
-                {"text": e[0], "time": e[1]} for e in recent_events
-            ],
-            "bot_username": bot_username if 'bot_username' in globals() else "Unknown",
-            "event_channel": settings.EVENT_CHANNEL,
-            "event_interval": settings.EVENT_INTERVAL
-        }
-    }
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        
+        # Основная статистика
+        c.execute("SELECT COUNT(*) FROM creatures")
+        total_creatures = c.fetchone()[0] or 0
+        
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
+        total_users = c.fetchone()[0] or 0
+        
+        c.execute("SELECT COUNT(*) FROM events")
+        total_events = c.fetchone()[0] or 0
+        
+        # Последние 3 события
+        c.execute("SELECT event_text, created_at FROM events ORDER BY id DESC LIMIT 3")
+        recent_events_data = c.fetchall()
+        
+        # Самый популярный материал
+        c.execute("SELECT material, COUNT(*) as cnt FROM creatures GROUP BY material ORDER BY cnt DESC LIMIT 1")
+        popular_material = c.fetchone() or ["Нет данных", 0]
+        
+        # Последнее созданное существо
+        c.execute("SELECT username, material, behavior, created_at FROM creatures ORDER BY id DESC LIMIT 1")
+        last_creature = c.fetchone() or ["Нет данных", "Нет данных", "Нет данных", datetime.now().isoformat()]
+        
+        conn.close()
+        
+        # Форматируем события
+        recent_events = []
+        for event_text, created_at in recent_events_data:
+            time = created_at.split()[1][:5] if created_at and ' ' in str(created_at) else '??:??'
+            date = created_at.split()[0] if created_at and ' ' in str(created_at) else 'сегодня'
+            recent_events.append({
+                "text": event_text,
+                "time": f"{date} {time}",
+                "full": created_at
+            })
+        
+        return jsonify({
+            "status": "success",
+            "data": {
+                "users": total_users,
+                "creatures": total_creatures,
+                "events": total_events,
+                "popular_material": {
+                    "name": popular_material[0],
+                    "count": popular_material[1]
+                },
+                "last_creature": {
+                    "creator": last_creature[0],
+                    "material": last_creature[1],
+                    "behavior": last_creature[2],
+                    "created": last_creature[3]
+                },
+                "recent_events": recent_events,
+                "bot_username": bot_username if 'bot_username' in globals() else "Unknown",
+                "event_channel": settings.EVENT_CHANNEL,
+                "event_interval": settings.EVENT_INTERVAL,
+                "server_time": datetime.now().isoformat()
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+@app.route('/api/creatures')
+def api_creatures():
+    """API для получения списка существ"""
+    try:
+        limit = int(request.args.get('limit', 10))
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('''SELECT id, username, material, behavior, trait, created_at 
+                     FROM creatures ORDER BY id DESC LIMIT ?''', (limit,))
+        creatures = c.fetchall()
+        conn.close()
+        
+        result = []
+        for creature in creatures:
+            result.append({
+                "id": creature[0],
+                "creator": creature[1],
+                "material": creature[2],
+                "behavior": creature[3],
+                "trait": creature[4],
+                "created": creature[5]
+            })
+        
+        return jsonify({
+            "status": "success",
+            "count": len(result),
+            "creatures": result
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 def run_flask():
     """Запускаем Flask сервер"""
     port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    print(f"🚀 Запуск Flask сервера на порту {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 # ========== НАСТРОЙКА ЛОГГИРОВАНИЯ ==========
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-bot = Bot(token=settings.BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+try:
+    bot = Bot(token=settings.BOT_TOKEN)
+    storage = MemoryStorage()
+    dp = Dispatcher(bot, storage=storage)
+    logger.info("🤖 Бот инициализирован")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации бота: {e}")
+    sys.exit(1)
 
 # Глобальная переменная для имени бота
 bot_username = None
@@ -166,8 +397,6 @@ async def cmd_start(message: types.Message):
     """Приветственное сообщение"""
     welcome_text = (
         "🐙 *Добро пожаловать в Заповедник Абсурда!*\n\n"
-        "Здесь ты создаёшь существ из ничего и наблюдаешь, "
-        "как они порождают хаос.\n\n"
         "*Как это работает:*\n"
         "1. Создаёшь существо из трёх компонентов\n"
         "2. Оно попадает в общую экосистему\n"
@@ -175,12 +404,12 @@ async def cmd_start(message: types.Message):
         "4. Следи за развитием безумия!\n\n"
         "*Основные команды:*\n"
         "`/create` — создать новое существо\n"
-        "`/my` — посмотреть своих существ (до 5)\n"
-        "`/events` — последние события в заповеднике\n"
+        "`/my` — посмотреть своих существ\n"
+        "`/events` — последние события\n"
         "`/stats` — статистика заповедника\n"
-        "`/materials` — список доступных материалов\n"
-        "`/behaviors` — список доступных поведений\n"
-        "`/traits` — список доступных признаков\n\n"
+        "`/materials` — список материалов\n"
+        "`/behaviors` — список поведений\n"
+        "`/traits` — список признаков\n\n"
         f"📢 *Канал событий:* {settings.EVENT_CHANNEL}\n"
         f"🕐 *Интервал событий:* {settings.EVENT_INTERVAL//60} минут\n\n"
         "💡 *Совет:* Чем абсурднее комбинация, тем интереснее события!"
@@ -192,12 +421,12 @@ async def cmd_create(message: types.Message):
     """Начать создание существа"""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    # Показываем только первые 8 элементов для удобства
-    for material in settings.MATERIALS[:8]:
+    # Показываем первые 6 элементов для удобства
+    for material in settings.MATERIALS[:6]:
         keyboard.add(material)
     
-    # Добавляем кнопку "Показать все"
     keyboard.add("📋 Показать все материалы")
+    keyboard.add("❌ Отмена")
     
     await message.reply(
         "🎲 *ШАГ 1 из 3*\nВыбери *МАТЕРИАЛ* существа:",
@@ -211,11 +440,17 @@ async def process_material(message: types.Message, state: FSMContext):
     """Обработка выбора материала"""
     material = message.text.strip()
     
-    # Обработка кнопки "Показать все"
+    # Обработка отмены
+    if material == "❌ Отмена":
+        await message.reply("❌ Создание отменено.", reply_markup=types.ReplyKeyboardRemove())
+        await state.finish()
+        return
+    
+    # Обработка "показать все"
     if material == "📋 Показать все материалы":
         all_materials = "\n".join([f"• {m}" for m in settings.MATERIALS])
         await message.reply(
-            f"📋 *Все материалы:*\n{all_materials}\n\n"
+            f"📋 *Все материалы ({len(settings.MATERIALS)}):*\n\n{all_materials}\n\n"
             "Введи название материала:",
             parse_mode='Markdown',
             reply_markup=types.ReplyKeyboardRemove()
@@ -226,7 +461,8 @@ async def process_material(message: types.Message, state: FSMContext):
         await message.reply(
             "❌ Такого материала нет в списке!\n"
             "Используй команду `/materials` чтобы увидеть все варианты.",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=types.ReplyKeyboardRemove()
         )
         return
     
@@ -235,10 +471,11 @@ async def process_material(message: types.Message, state: FSMContext):
     
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    for behavior in settings.BEHAVIORS[:8]:
+    for behavior in settings.BEHAVIORS[:6]:
         keyboard.add(behavior)
     
     keyboard.add("📋 Показать все поведения")
+    keyboard.add("❌ Отмена")
     
     await message.reply(
         "🎲 *ШАГ 2 из 3*\nВыбери *ПОВЕДЕНИЕ* существа:",
@@ -252,10 +489,15 @@ async def process_behavior(message: types.Message, state: FSMContext):
     """Обработка выбора поведения"""
     behavior = message.text.strip()
     
+    if behavior == "❌ Отмена":
+        await message.reply("❌ Создание отменено.", reply_markup=types.ReplyKeyboardRemove())
+        await state.finish()
+        return
+    
     if behavior == "📋 Показать все поведения":
         all_behaviors = "\n".join([f"• {b}" for b in settings.BEHAVIORS])
         await message.reply(
-            f"📋 *Все поведения:*\n{all_behaviors}\n\n"
+            f"📋 *Все поведения ({len(settings.BEHAVIORS)}):*\n\n{all_behaviors}\n\n"
             "Введи название поведения:",
             parse_mode='Markdown',
             reply_markup=types.ReplyKeyboardRemove()
@@ -266,7 +508,8 @@ async def process_behavior(message: types.Message, state: FSMContext):
         await message.reply(
             "❌ Такого поведения нет в списке!\n"
             "Используй команду `/behaviors` чтобы увидеть все варианты.",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=types.ReplyKeyboardRemove()
         )
         return
     
@@ -275,10 +518,11 @@ async def process_behavior(message: types.Message, state: FSMContext):
     
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
-    for trait in settings.TRAITS[:8]:
+    for trait in settings.TRAITS[:6]:
         keyboard.add(trait)
     
     keyboard.add("📋 Показать все признаки")
+    keyboard.add("❌ Отмена")
     
     await message.reply(
         "🎲 *ШАГ 3 из 3*\nВыбери *ОСОБЫЙ ПРИЗНАК*:",
@@ -292,10 +536,15 @@ async def process_trait(message: types.Message, state: FSMContext):
     """Финальный шаг создания существа"""
     trait = message.text.strip()
     
+    if trait == "❌ Отмена":
+        await message.reply("❌ Создание отменено.", reply_markup=types.ReplyKeyboardRemove())
+        await state.finish()
+        return
+    
     if trait == "📋 Показать все признаки":
         all_traits = "\n".join([f"• {t}" for t in settings.TRAITS])
         await message.reply(
-            f"📋 *Все признаки:*\n{all_traits}\n\n"
+            f"📋 *Все признаки ({len(settings.TRAITS)}):*\n\n{all_traits}\n\n"
             "Введи название признака:",
             parse_mode='Markdown',
             reply_markup=types.ReplyKeyboardRemove()
@@ -306,7 +555,8 @@ async def process_trait(message: types.Message, state: FSMContext):
         await message.reply(
             "❌ Такого признака нет в списке!\n"
             "Используй команду `/traits` чтобы увидеть все варианты.",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=types.ReplyKeyboardRemove()
         )
         return
     
@@ -338,6 +588,8 @@ async def process_trait(message: types.Message, state: FSMContext):
                 f"🌀 Новая форма жизни обнаружена!",
                 f"🌟 Зафиксирован аномальный уровень абсурда!",
                 f"💫 Это может изменить экосистему навсегда!",
+                f"🎭 В заповеднике стало веселее!",
+                f"🔮 Магия абсурда работает!",
             ]
             
             response = (
@@ -358,6 +610,14 @@ async def process_trait(message: types.Message, state: FSMContext):
             )
             
             logger.info(f"Создано существо #{creature_id} пользователем {username}")
+            
+            # Сразу генерируем событие с новым существом
+            try:
+                event = await generate_random_event(force_include_id=creature_id)
+                if event:
+                    await bot.send_message(settings.EVENT_CHANNEL, event, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Ошибка при генерации события: {e}")
             
         except Exception as e:
             logger.error(f"Ошибка при создании существа: {e}")
@@ -384,7 +644,7 @@ async def cmd_my(message: types.Message):
         # Общее количество существ пользователя
         c.execute('''SELECT COUNT(*) FROM creatures WHERE user_id = ?''',
                   (message.from_user.id,))
-        total_count = c.fetchone()[0]
+        total_count = c.fetchone()[0] or 0
         
         conn.close()
         
@@ -400,8 +660,8 @@ async def cmd_my(message: types.Message):
         
         for i, creature in enumerate(creatures, 1):
             creature_id, material, behavior, trait, created_at = creature
-            created_time = created_at.split()[1][:5] if ' ' in str(created_at) else '??:??'
-            created_date = created_at.split()[0] if ' ' in str(created_at) else created_at
+            created_time = created_at.split()[1][:5] if created_at and ' ' in str(created_at) else '??:??'
+            created_date = created_at.split()[0] if created_at and ' ' in str(created_at) else 'сегодня'
             
             response += (
                 f"{i}. *#{creature_id}: {material} {behavior.lower()}*\n"
@@ -441,8 +701,8 @@ async def cmd_events(message: types.Message):
         
         for i, event in enumerate(events, 1):
             event_text, created_at = event
-            time = created_at.split()[1][:5] if ' ' in str(created_at) else '??:??'
-            date = created_at.split()[0] if ' ' in str(created_at) else created_at
+            time = created_at.split()[1][:5] if created_at and ' ' in str(created_at) else '??:??'
+            date = created_at.split()[0] if created_at and ' ' in str(created_at) else 'сегодня'
             
             # Украшаем разные типы событий
             if "💥" in event_text:
@@ -475,13 +735,13 @@ async def cmd_stats(message: types.Message):
         
         # Общая статистика
         c.execute("SELECT COUNT(*) FROM creatures")
-        total_creatures = c.fetchone()[0]
+        total_creatures = c.fetchone()[0] or 0
         
         c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
-        total_users = c.fetchone()[0]
+        total_users = c.fetchone()[0] or 0
         
         c.execute("SELECT COUNT(*) FROM events")
-        total_events = c.fetchone()[0]
+        total_events = c.fetchone()[0] or 0
         
         # Самый активный пользователь
         c.execute('''SELECT username, COUNT(*) as cnt 
@@ -519,8 +779,7 @@ async def cmd_stats(message: types.Message):
             f"   {last_creature[1]} {last_creature[2]}\n"
             f"   👤 от {last_creature[0]}\n\n"
             f"📢 *Канал событий:* {settings.EVENT_CHANNEL}\n"
-            f"⏱️ *Интервал:* {settings.EVENT_INTERVAL//60} минут\n\n"
-            f"🌐 *Веб-панель:* https://{os.environ.get('RENDER_SERVICE_NAME', 'ваш-сервис')}.onrender.com"
+            f"⏱️ *Интервал:* {settings.EVENT_INTERVAL//60} минут"
         )
         
         await message.reply(stats_text, parse_mode='Markdown')
@@ -558,23 +817,45 @@ async def cmd_traits(message: types.Message):
 
 # ========== ГЕНЕРАЦИЯ СОБЫТИЙ ==========
 
-async def generate_random_event():
+async def generate_random_event(force_include_id=None):
     """Создать случайное событие в экосистеме"""
     try:
         conn = get_connection()
         c = conn.cursor()
         
-        # Получаем два случайных существа
-        c.execute('''SELECT id, material, behavior, trait, username 
-                     FROM creatures 
-                     ORDER BY RANDOM() LIMIT 2''')
-        creatures = c.fetchall()
-        
-        if len(creatures) < 2:
-            conn.close()
-            return None
-        
-        creature1, creature2 = creatures
+        # Получаем существа
+        if force_include_id:
+            # Включаем указанное существо
+            c.execute('''SELECT id, material, behavior, trait, username 
+                         FROM creatures WHERE id = ?''', (force_include_id,))
+            creature1 = c.fetchone()
+            
+            # Второе существо - случайное
+            c.execute('''SELECT id, material, behavior, trait, username 
+                         FROM creatures WHERE id != ? ORDER BY RANDOM() LIMIT 1''', (force_include_id,))
+            creature2 = c.fetchone()
+            
+            if not creature1 or not creature2:
+                # Если не получилось, берем два случайных
+                c.execute('''SELECT id, material, behavior, trait, username 
+                             FROM creatures ORDER BY RANDOM() LIMIT 2''')
+                creatures = c.fetchall()
+                if len(creatures) >= 2:
+                    creature1, creature2 = creatures[0], creatures[1]
+                else:
+                    conn.close()
+                    return None
+        else:
+            # Два случайных существа
+            c.execute('''SELECT id, material, behavior, trait, username 
+                         FROM creatures ORDER BY RANDOM() LIMIT 2''')
+            creatures = c.fetchall()
+            
+            if len(creatures) < 2:
+                conn.close()
+                return None
+            
+            creature1, creature2 = creatures
         
         # Шаблоны событий с разными типами
         event_templates = [
@@ -622,6 +903,17 @@ async def event_scheduler():
         try:
             await asyncio.sleep(settings.EVENT_INTERVAL)
             
+            # Проверяем, есть ли существа
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM creatures")
+            creature_count = c.fetchone()[0] or 0
+            conn.close()
+            
+            if creature_count < 2:
+                logger.info(f"📭 Недостаточно существ для генерации события ({creature_count} существ)")
+                continue
+            
             # Генерируем событие
             event = await generate_random_event()
             if event:
@@ -629,7 +921,7 @@ async def event_scheduler():
                 await bot.send_message(settings.EVENT_CHANNEL, event, parse_mode='Markdown')
                 logger.info(f"📨 Отправлено событие в канал: {event[:50]}...")
             else:
-                logger.info("📭 Недостаточно существ для генерации события")
+                logger.info("📭 Не удалось сгенерировать событие")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка в планировщике событий: {e}")
@@ -649,6 +941,8 @@ async def handle_text(message: types.Message):
         'существо': '🦠 Чтобы создать существо, используй команду /create',
         'абсурд': '🌀 Абсурд — наша валюта, наш бог, наше всё!',
         'помощь': '📚 Используй /help для получения справки',
+        'старт': '🚀 Уже запущено! Используй /create чтобы начать.',
+        'статистика': '📊 Используй /stats чтобы увидеть статистику',
     }
     
     for keyword, response in responses.items():
@@ -656,8 +950,8 @@ async def handle_text(message: types.Message):
             await message.reply(response)
             return
     
-    # Если не нашли ключевое слово
-    if len(text) < 50:  # Не реагируем на длинные сообщения
+    # Если не нашли ключевое слово и сообщение короткое
+    if len(text) < 50:
         await message.reply(
             "🤔 Не понимаю...\n"
             "Используй /create чтобы создать существо\n"
@@ -678,53 +972,89 @@ async def on_startup(dp):
     init_db()
     
     # Получаем информацию о боте
-    bot_info = await bot.get_me()
-    bot_username = bot_info.username
-    logger.info(f"🤖 Бот: @{bot_username}")
-    logger.info(f"📢 Канал событий: {settings.EVENT_CHANNEL}")
-    logger.info(f"⏱️ Интервал событий: {settings.EVENT_INTERVAL} сек ({settings.EVENT_INTERVAL//60} мин)")
+    try:
+        bot_info = await bot.get_me()
+        bot_username = bot_info.username
+        logger.info(f"🤖 Бот: @{bot_username}")
+        logger.info(f"📢 Канал событий: {settings.EVENT_CHANNEL}")
+        logger.info(f"⏱️ Интервал событий: {settings.EVENT_INTERVAL} сек ({settings.EVENT_INTERVAL//60} мин)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения информации о боте: {e}")
+        bot_username = "unknown"
     
     # Запускаем планировщик событий
     asyncio.create_task(event_scheduler())
     
-    # Обновляем HTML шаблон Flask
+    # Обновляем контекст Flask
     @app.context_processor
     def inject_stats():
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM creatures")
-        creatures = c.fetchone()[0]
-        c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
-        users = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM events")
-        events = c.fetchone()[0]
-        conn.close()
-        
-        return {
-            'users': users,
-            'creatures': creatures,
-            'events': events,
-            'bot_username': bot_username,
-            'event_channel': settings.EVENT_CHANNEL,
-            'interval': settings.EVENT_INTERVAL
-        }
+        try:
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM creatures")
+            creatures = c.fetchone()[0] or 0
+            c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
+            users = c.fetchone()[0] or 0
+            c.execute("SELECT COUNT(*) FROM events")
+            events = c.fetchone()[0] or 0
+            
+            # Последние события
+            c.execute("SELECT event_text, created_at FROM events ORDER BY id DESC LIMIT 3")
+            recent_events_data = c.fetchall()
+            conn.close()
+            
+            recent_events = []
+            for event_text, created_at in recent_events_data:
+                time = created_at.split()[1][:5] if created_at and ' ' in str(created_at) else '??:??'
+                date = created_at.split()[0] if created_at and ' ' in str(created_at) else 'сегодня'
+                recent_events.append({
+                    "text": event_text,
+                    "time": f"{date} {time}"
+                })
+            
+            return {
+                'users': users,
+                'creatures': creatures,
+                'events': events,
+                'bot_username': bot_username,
+                'event_channel': settings.EVENT_CHANNEL,
+                'interval': settings.EVENT_INTERVAL,
+                'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                'recent_events': recent_events
+            }
+        except Exception as e:
+            logger.error(f"Ошибка в inject_stats: {e}")
+            return {
+                'users': 0,
+                'creatures': 0,
+                'events': 0,
+                'bot_username': bot_username,
+                'event_channel': settings.EVENT_CHANNEL,
+                'interval': settings.EVENT_INTERVAL,
+                'python_version': f"{sys.version_info.major}.{sys.version_info.minor}",
+                'recent_events': []
+            }
     
     logger.info("✅ Заповедник Абсурда готов к работе!")
     logger.info("🌐 Веб-панель будет доступна на порту 8080")
 
 def run_bot():
-    """Запуск бота в отдельном потоке"""
-    executor.start_polling(
-        dp,
-        skip_updates=True,
-        on_startup=on_startup
-    )
+    """Запуск бота"""
+    try:
+        executor.start_polling(
+            dp,
+            skip_updates=True,
+            on_startup=on_startup
+        )
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка бота: {e}")
+        sys.exit(1)
 
 if __name__ == '__main__':
-    # Запускаем Flask сервер для Render
+    # Запускаем Flask сервер для Render в отдельном потоке
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info("🚀 Flask сервер запущен")
+    logger.info("🚀 Flask сервер запущен в отдельном потоке")
     
-    # Запускаем бота
+    # Запускаем бота в основном потоке
     run_bot()
