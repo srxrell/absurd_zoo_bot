@@ -1,8 +1,10 @@
 import logging
 import random
 import sqlite3
-import asyncio
+import os
 from datetime import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -11,114 +13,85 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
 
 from config.settings import settings
-from database import get_connection
+from database import get_connection, init_db
 
-# Настройка логирования
+# ========== НАСТРОЙКА ==========
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
 bot = Bot(token=settings.BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
+scheduler = AsyncIOScheduler()
 
-# Состояния для создания существа
+# ========== СОСТОЯНИЯ ==========
 class CreatureCreation(StatesGroup):
     material = State()
     behavior = State()
     trait = State()
 
-# ========== КОМАНДЫ БОТА ==========
-
+# ========== КОМАНДЫ (оставляем те же) ==========
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: types.Message):
-    """Приветственное сообщение"""
     welcome_text = (
         "🐙 *Добро пожаловать в Заповедник Абсурда!*\n\n"
-        "Здесь ты создаёшь существ из ничего и наблюдаешь, "
-        "как они порождают хаос.\n\n"
-        "*Основные команды:*\n"
+        "Основные команды:\n"
         "`/create` — создать новое существо\n"
         "`/my` — посмотреть своих существ\n"
-        "`/events` — последние события в заповеднике\n"
-        "`/stats` — статистика заповедника\n\n"
-        "*Как это работает:*\n"
-        "1. Создаёшь существо из Материала, Поведения и Признака\n"
-        "2. Бот автоматически генерирует события с твоими существами\n"
-        "3. Следи за каналом: " + settings.EVENT_CHANNEL
+        "`/events` — последние события\n"
+        "`/stats` — статистика\n\n"
+        f"📢 Канал событий: {settings.EVENT_CHANNEL}"
     )
     await message.reply(welcome_text, parse_mode='Markdown')
 
 @dp.message_handler(commands=['create'])
 async def cmd_create(message: types.Message):
-    """Начать создание существа"""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for material in settings.MATERIALS:
+    for material in settings.MATERIALS[:6]:  # Первые 6 для мобильных
         keyboard.add(material)
-    
-    await message.reply(
-        "🎲 *ШАГ 1/3*: Выбери *МАТЕРИАЛ* существа:",
-        reply_markup=keyboard,
-        parse_mode='Markdown'
-    )
+    await message.reply("🎲 ШАГ 1/3: Выбери МАТЕРИАЛ:", reply_markup=keyboard)
     await CreatureCreation.material.set()
 
 @dp.message_handler(state=CreatureCreation.material)
 async def process_material(message: types.Message, state: FSMContext):
-    """Обработка выбора материала"""
     material = message.text.strip()
-    
     if material not in settings.MATERIALS:
-        await message.reply("❌ Выбери материал из списка!")
+        await message.reply("❌ Выбери из списка!")
         return
     
     async with state.proxy() as data:
         data['material'] = material
     
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for behavior in settings.BEHAVIORS:
+    for behavior in settings.BEHAVIORS[:6]:
         keyboard.add(behavior)
-    
-    await message.reply(
-        "🎲 *ШАГ 2/3*: Выбери *ПОВЕДЕНИЕ* существа:",
-        reply_markup=keyboard,
-        parse_mode='Markdown'
-    )
+    await message.reply("🎲 ШАГ 2/3: Выбери ПОВЕДЕНИЕ:", reply_markup=keyboard)
     await CreatureCreation.behavior.set()
 
 @dp.message_handler(state=CreatureCreation.behavior)
 async def process_behavior(message: types.Message, state: FSMContext):
-    """Обработка выбора поведения"""
     behavior = message.text.strip()
-    
     if behavior not in settings.BEHAVIORS:
-        await message.reply("❌ Выбери поведение из списка!")
+        await message.reply("❌ Выбери из списка!")
         return
     
     async with state.proxy() as data:
         data['behavior'] = behavior
     
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for trait in settings.TRAITS:
+    for trait in settings.TRAITS[:6]:
         keyboard.add(trait)
-    
-    await message.reply(
-        "🎲 *ШАГ 3/3*: Выбери *ОСОБЫЙ ПРИЗНАК*:",
-        reply_markup=keyboard,
-        parse_mode='Markdown'
-    )
+    await message.reply("🎲 ШАГ 3/3: Выбери ПРИЗНАК:", reply_markup=keyboard)
     await CreatureCreation.trait.set()
 
 @dp.message_handler(state=CreatureCreation.trait)
 async def process_trait(message: types.Message, state: FSMContext):
-    """Финальный шаг создания существа"""
     trait = message.text.strip()
-    
     if trait not in settings.TRAITS:
-        await message.reply("❌ Выбери признак из списка!")
+        await message.reply("❌ Выбери из списка!")
         return
     
     async with state.proxy() as data:
@@ -136,189 +109,143 @@ async def process_trait(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
         
-        # Формируем ответ
-        creature_name = f"{data['material']} {data['behavior'].lower()}"
+        # Ответ
         response = (
             f"✅ *Существо #{creature_id} создано!*\n\n"
-            f"🔮 *{creature_name}*\n"
-            f"⚡ *Признак:* {trait}\n"
-            f"👤 *Автор:* @{username}\n"
-            f"🕐 *Создано:* {datetime.now().strftime('%H:%M')}\n\n"
-            f"Оно уже заселено в заповедник и скоро появится в событиях!"
+            f"🔮 {data['material']} {data['behavior'].lower()}\n"
+            f"⚡ Признак: {trait}\n"
+            f"👤 Автор: @{username}\n\n"
+            f"Скоро появится в событиях!"
         )
-        
-        await message.reply(
-            response, 
-            parse_mode='Markdown',
-            reply_markup=types.ReplyKeyboardRemove()
-        )
-        
-        logger.info(f"Создано существо #{creature_id} пользователем {username}")
+        await message.reply(response, parse_mode='Markdown', reply_markup=types.ReplyKeyboardRemove())
     
     await state.finish()
 
 @dp.message_handler(commands=['my'])
 async def cmd_my(message: types.Message):
-    """Показать существ пользователя"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''SELECT id, material, behavior, trait, created_at 
-                 FROM creatures 
-                 WHERE user_id = ? 
-                 ORDER BY id DESC LIMIT 10''',
+    c.execute('''SELECT id, material, behavior, trait FROM creatures 
+                 WHERE user_id = ? ORDER BY id DESC LIMIT 5''',
               (message.from_user.id,))
     creatures = c.fetchall()
     conn.close()
     
     if not creatures:
-        await message.reply("У тебя пока нет существ. Создай первое командой `/create`", parse_mode='Markdown')
+        await message.reply("У тебя пока нет существ. `/create`", parse_mode='Markdown')
         return
     
-    response = "🦠 *Твои существа:*\n\n"
-    for creature in creatures:
-        created_time = creature[4].split()[1][:5] if ' ' in str(creature[4]) else '??:??'
-        response += f"*#{creature[0]}*: {creature[1]} {creature[2]}\n"
-        response += f"   Признак: {creature[3]}\n"
-        response += f"   Создано: {created_time}\n\n"
-    
+    response = "🦠 Твои существа:\n\n"
+    for c in creatures:
+        response += f"*#{c[0]}*: {c[1]} {c[2]}\n   ({c[3]})\n\n"
     await message.reply(response, parse_mode='Markdown')
 
 @dp.message_handler(commands=['events'])
 async def cmd_events(message: types.Message):
-    """Показать последние события"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''SELECT event_text, created_at 
-                 FROM events 
-                 ORDER BY id DESC LIMIT 5''')
+    c.execute('''SELECT event_text, created_at FROM events 
+                 ORDER BY id DESC LIMIT 3''')
     events = c.fetchall()
     conn.close()
     
     if not events:
-        await message.reply("📭 В заповеднике пока тихо... Слишком тихо.")
+        await message.reply("Событий пока нет")
         return
     
-    response = "📜 *Последние события в Заповеднике:*\n\n"
-    for event in events:
-        time = event[1].split()[1][:5] if ' ' in str(event[1]) else '??:??'
-        response += f"• {event[0]} *({time})*\n\n"
-    
-    await message.reply(response, parse_mode='Markdown')
+    response = "📜 Последние события:\n\n"
+    for e in events:
+        time = e[1].split()[1][:5] if ' ' in str(e[1]) else '??:??'
+        response += f"• {e[0]} ({time})\n\n"
+    await message.reply(response)
 
 @dp.message_handler(commands=['stats'])
 async def cmd_stats(message: types.Message):
-    """Статистика заповедника"""
     conn = get_connection()
     c = conn.cursor()
-    
-    # Общая статистика
     c.execute("SELECT COUNT(*) FROM creatures")
-    total_creatures = c.fetchone()[0]
-    
+    total = c.fetchone()[0]
     c.execute("SELECT COUNT(DISTINCT user_id) FROM creatures")
-    total_users = c.fetchone()[0]
-    
+    users = c.fetchone()[0]
     c.execute("SELECT COUNT(*) FROM events")
-    total_events = c.fetchone()[0]
-    
-    # Самый популярный материал
-    c.execute("SELECT material, COUNT(*) as cnt FROM creatures GROUP BY material ORDER BY cnt DESC LIMIT 1")
-    popular_material = c.fetchone() or ("Нет данных", 0)
-    
+    events = c.fetchone()[0]
     conn.close()
     
-    stats_text = (
-        "📊 *Статистика Заповедника Абсурда*\n\n"
-        f"👥 *Пользователи:* {total_users}\n"
-        f"🦠 *Существ:* {total_creatures}\n"
-        f"📜 *Событий:* {total_events}\n"
-        f"🏆 *Популярный материал:* {popular_material[0]} ({popular_material[1]})\n\n"
-        f"📢 *Канал событий:* {settings.EVENT_CHANNEL}"
+    stats = (
+        f"📊 Статистика:\n\n"
+        f"👥 Пользователи: {users}\n"
+        f"🦠 Существ: {total}\n"
+        f"📜 Событий: {events}\n"
+        f"📢 Канал: {settings.EVENT_CHANNEL}"
     )
-    
-    await message.reply(stats_text, parse_mode='Markdown')
+    await message.reply(stats)
 
-# ========== АВТОМАТИЧЕСКАЯ ГЕНЕРАЦИЯ СОБЫТИЙ ==========
-
+# ========== АВТО-СОБЫТИЯ ==========
 async def generate_event():
-    """Сгенерировать случайное событие"""
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # Получаем два случайных существа
-    c.execute('''SELECT id, material, behavior, trait, username 
-                 FROM creatures 
-                 ORDER BY RANDOM() LIMIT 2''')
-    creatures = c.fetchall()
-    
-    if len(creatures) < 2:
+    """Создать случайное событие"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('''SELECT id, material, behavior, trait, username 
+                     FROM creatures ORDER BY RANDOM() LIMIT 2''')
+        creatures = c.fetchall()
+        
+        if len(creatures) < 2:
+            return None
+        
+        c1, c2 = creatures
+        templates = [
+            f"🔄 {c1[1]} {c1[2]} встретил {c2[1]} {c2[2]}...",
+            f"💥 '{c1[3]}' vs '{c2[3]}' — конфликт!",
+            f"🌀 Под влиянием {c2[2]} у {c1[1]} новый признак",
+            f"📈 {c1[4]} и {c2[4]} создали гибрид абсурда",
+        ]
+        
+        event = random.choice(templates)
+        c.execute('''INSERT INTO events (creature1_id, creature2_id, event_text)
+                     VALUES (?, ?, ?)''', (c1[0], c2[0], event))
+        conn.commit()
         conn.close()
+        
+        # Отправляем в канал
+        await bot.send_message(settings.EVENT_CHANNEL, event)
+        logger.info(f"Событие создано: {event[:50]}...")
+        return event
+        
+    except Exception as e:
+        logger.error(f"Ошибка генерации: {e}")
         return None
-    
-    creature1, creature2 = creatures
-    
-    # Шаблоны событий
-    event_templates = [
-        "🔄 *Встреча*: {material1} {behavior1} встретил {material2} {behavior2}...",
-        "💥 *Конфликт*: '{trait1}' вступил в противоречие с '{trait2}'!",
-        "🤝 *Симбиоз*: {material1} и {material2} образовали нестабильный альянс.",
-        "🌀 *Мутация*: Под влиянием {behavior2} у {material1} проявился новый признак.",
-        "📈 *Эволюция*: {username1} и {username2} создали гибрид абсурда.",
-        "⚠️ *Нарушение*: {material1} {behavior1} нарушил правила заповедника.",
-    ]
-    
-    # Заполняем шаблон
-    template = random.choice(event_templates)
-    event_text = template.format(
-        material1=creature1[1], behavior1=creature1[2], trait1=creature1[3], username1=creature1[4],
-        material2=creature2[1], behavior2=creature2[2], trait2=creature2[3], username2=creature2[4]
+
+# ========== ЗАПУСК НА РЕНДЕРЕ ==========
+def start_scheduler():
+    """Запуск планировщика событий"""
+    scheduler.add_job(
+        generate_event,
+        trigger=IntervalTrigger(seconds=settings.EVENT_INTERVAL),
+        id='event_generator',
+        replace_existing=True
     )
-    
-    # Сохраняем в базу
-    c.execute('''INSERT INTO events (creature1_id, creature2_id, event_text)
-                 VALUES (?, ?, ?)''', (creature1[0], creature2[0], event_text))
-    conn.commit()
-    conn.close()
-    
-    return event_text
-
-async def event_scheduler():
-    """Планировщик автоматических событий"""
-    logger.info(f"Планировщик событий запущен (интервал: {settings.EVENT_INTERVAL}с)")
-    
-    while True:
-        try:
-            await asyncio.sleep(settings.EVENT_INTERVAL)
-            
-            event = await generate_event()
-            if event:
-                await bot.send_message(settings.EVENT_CHANNEL, event, parse_mode='Markdown')
-                logger.info(f"Сгенерировано событие: {event[:50]}...")
-            else:
-                logger.info("Недостаточно существ для генерации события")
-                
-        except Exception as e:
-            logger.error(f"Ошибка в планировщике: {e}")
-
-# ========== ЗАПУСК БОТА ==========
+    scheduler.start()
+    logger.info(f"Планировщик запущен (интервал: {settings.EVENT_INTERVAL}с)")
 
 async def on_startup(dp):
-    """Действия при запуске бота"""
-    logger.info("Заповедник Абсурда запускается...")
+    """Действия при старте"""
+    logger.info("=== Заповедник Абсурда запускается ===")
     
-    # Проверяем базу данных
-    from database import init_db
+    # Инициализация БД
     init_db()
     
-    # Запускаем планировщик событий
-    asyncio.create_task(event_scheduler())
+    # Запуск планировщика
+    start_scheduler()
     
-    logger.info("✅ Бот успешно запущен")
+    logger.info("✅ Бот готов к работе")
+    logger.info(f"🤖 Бот: @{(await bot.get_me()).username}")
+    logger.info(f"📢 Канал: {settings.EVENT_CHANNEL}")
 
 if __name__ == '__main__':
-    # Запуск бота
+    # Запуск
     executor.start_polling(
-        dp, 
+        dp,
         skip_updates=True,
         on_startup=on_startup
     )
