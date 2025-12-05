@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: absurd-zoo-bot
+    env: python
+    region: frankfurt  # или другой ближайший
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: EVENT_CHANNEL
+        value: "@absurd_zoo_log"  # твой канал
+      - key: EVENT_INTERVAL
+        value: "1800"
+      - key: DATABASE_PATH
+        value: "/tmp/absurd.db"  # Render требует временный путь
